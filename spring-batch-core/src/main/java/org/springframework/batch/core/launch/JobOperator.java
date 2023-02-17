@@ -17,6 +17,7 @@ package org.springframework.batch.core.launch;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 
 import org.springframework.batch.core.Job;
@@ -39,6 +40,7 @@ import org.springframework.lang.Nullable;
  *
  * @author Dave Syer
  * @author Mahmoud Ben Hassine
+ * @author Jinwoo Bae
  * @since 2.0
  */
 public interface JobOperator {
@@ -112,7 +114,23 @@ public interface JobOperator {
 	 * @throws JobParametersInvalidException thrown if any of the job parameters are
 	 * invalid.
 	 */
+	@Deprecated
 	Long start(String jobName, String parameters)
+			throws NoSuchJobException, JobInstanceAlreadyExistsException, JobParametersInvalidException;
+
+	/**
+	 * Start a new instance of a job with the parameters specified.
+	 * @param jobName the name of the {@link Job} to launch
+	 * @param parameters the parameters to launch it with (new line separated key=value
+	 * pairs)
+	 * @return the id of the {@link JobExecution} that is launched
+	 * @throws NoSuchJobException if there is no {@link Job} with the specified name
+	 * @throws JobInstanceAlreadyExistsException if a job instance with this name and
+	 * parameters already exists
+	 * @throws JobParametersInvalidException thrown if any of the job parameters are
+	 * invalid.
+	 */
+	Long start(String jobName, Properties parameters)
 			throws NoSuchJobException, JobInstanceAlreadyExistsException, JobParametersInvalidException;
 
 	/**

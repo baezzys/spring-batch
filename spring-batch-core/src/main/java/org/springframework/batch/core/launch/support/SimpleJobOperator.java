@@ -84,6 +84,7 @@ import org.springframework.util.Assert;
  * @author Lucas Ward
  * @author Will Schipp
  * @author Mahmoud Ben Hassine
+ * @author Jinwoo Bae
  * @since 2.0
  */
 public class SimpleJobOperator implements JobOperator, InitializingBean {
@@ -322,6 +323,44 @@ public class SimpleJobOperator implements JobOperator, InitializingBean {
 			throw new JobInstanceAlreadyExistsException(
 					String.format("Cannot start a job instance that already exists with name=%s and parameters={%s}",
 							jobName, parameters));
+		}
+
+		Job job = jobRegistry.getJob(jobName);
+		if (logger.isInfoEnabled()) {
+			logger.info(
+					String.format("Attempting to launch job with name=%s and parameters={%s}", jobName, parameters));
+		}
+		try {
+			return jobLauncher.run(job, jobParameters).getId();
+		}
+		catch (JobExecutionAlreadyRunningException e) {
+			throw new UnexpectedJobExecutionException(
+					String.format(ILLEGAL_STATE_MSG, "job execution already running", jobName, parameters), e);
+		}
+		catch (JobRestartException e) {
+			throw new UnexpectedJobExecutionException(
+					String.format(ILLEGAL_STATE_MSG, "job not restartable", jobName, parameters), e);
+		}
+		catch (JobInstanceAlreadyCompleteException e) {
+			throw new UnexpectedJobExecutionException(
+					String.format(ILLEGAL_STATE_MSG, "job already complete", jobName, parameters), e);
+		}
+
+	}
+
+	@Override
+	public Long start(String jobName, Properties parameters)
+			throws NoSuchJobException, JobInstanceAlreadyExistsException, JobParametersInvalidException {
+		if (logger.isInfoEnabled()) {
+			logger.info("Checking status of job with name=" + jobName);
+		}
+
+		JobParameters jobParameters = jobParametersConverter.getJobParameters(parameters);
+
+		if (jobRepository.isJobInstanceExists(jobName, jobParameters)) {
+			throw new JobInstanceAlreadyExistsException(
+					String.format("Cannot start a job instance that already exists with name=%s and parameters={%s}",
+							jobName, jobParameters));
 		}
 
 		Job job = jobRegistry.getJob(jobName);
