@@ -17,13 +17,19 @@
 package org.springframework.batch.item.kafka;
 
 import java.time.Duration;
-import java.util.Properties;
+import java.util.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedConstruction;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import org.springframework.batch.item.ExecutionContext;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mockConstruction;
 
 /**
  * @author Mathieu Ouellet
@@ -77,4 +83,118 @@ class KafkaItemReaderTests {
 		assertEquals("pollTimeout must not be negative", exception.getMessage());
 	}
 
+	@Test
+	void testExecutionContextSerializationWithJackson() throws Exception {
+		Properties consumerProperties = new Properties();
+		consumerProperties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "mockServer");
+		consumerProperties.put(ConsumerConfig.GROUP_ID_CONFIG, "testGroup");
+		consumerProperties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		consumerProperties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+		KafkaItemReader<String, String> reader = new KafkaItemReader<>(consumerProperties, "testTopic", 0, 1);
+		reader.setName("kafkaItemReader");
+
+		// Simulate how Jackson would serialize/deserialize the offset data
+		ExecutionContext executionContext = new ExecutionContext();
+		List<Map<String, Object>> offsets = new ArrayList<>();
+		
+		Map<String, Object> offset1 = new HashMap<>();
+		offset1.put("topic", "testTopic");
+		offset1.put("partition", 0);
+		offset1.put("offset", 100L);
+		offsets.add(offset1);
+		
+		Map<String, Object> offset2 = new HashMap<>();
+		offset2.put("topic", "testTopic");
+		offset2.put("partition", 1);
+		offset2.put("offset", 200L);
+		offsets.add(offset2);
+
+		// Simulate Jackson serialization/deserialization
+		ObjectMapper objectMapper = new ObjectMapper();
+		String serialized = objectMapper.writeValueAsString(offsets);
+		List<Map<String, Object>> deserializedOffsets = objectMapper.readValue(serialized, List.class);
+
+		executionContext.put("kafkaItemReader.topic.partition.offsets", deserializedOffsets);
+
+		try (MockedConstruction<org.apache.kafka.clients.consumer.KafkaConsumer> mockedConstruction = mockConstruction(
+				org.apache.kafka.clients.consumer.KafkaConsumer.class)) {
+
+			reader.open(executionContext);
+
+			ExecutionContext newContext = new ExecutionContext();
+			reader.update(newContext);
+
+			List<Map<String, Object>> savedOffsets = (List<Map<String, Object>>) newContext.get("kafkaItemReader.topic.partition.offsets");
+			assertNotNull(savedOffsets);
+			assertEquals(2, savedOffsets.size());
+			
+			boolean foundPartition0 = false;
+			boolean foundPartition1 = false;
+			for (Map<String, Object> offsetEntry : savedOffsets) {
+				String topic = (String) offsetEntry.get("topic");
+				Integer partition = (Integer) offsetEntry.get("partition");
+				Long offset = (Long) offsetEntry.get("offset");
+				
+				assertEquals("testTopic", topic);
+				assertNotNull(offset);
+				
+				if (partition == 0) {
+					foundPartition0 = true;
+					assertEquals(101L, offset);  // restored offset + 1
+				} else if (partition == 1) {
+					foundPartition1 = true;
+					assertEquals(201L, offset);  // restored offset + 1
+				}
+			}
+			
+			assertTrue(foundPartition0);
+			assertTrue(foundPartition1);
+		}
+	}
+
+	@Test
+	void testExecutionContextWithStringKeys() throws Exception {
+		Properties consumerProperties = new Properties();
+		consumerProperties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "mockServer");
+		consumerProperties.put(ConsumerConfig.GROUP_ID_CONFIG, "testGroup");
+		consumerProperties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		consumerProperties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+		KafkaItemReader<String, String> reader = new KafkaItemReader<>(consumerProperties, "testTopic", 0, 1);
+		reader.setName("kafkaItemReader");
+
+		// Create ExecutionContext with list of maps (as it would be after Jackson
+		// deserialization)
+		ExecutionContext executionContext = new ExecutionContext();
+		List<Map<String, Object>> storedOffsets = new ArrayList<>();
+		
+		Map<String, Object> offset1 = new HashMap<>();
+		offset1.put("topic", "testTopic");
+		offset1.put("partition", 0);
+		offset1.put("offset", 100L);
+		storedOffsets.add(offset1);
+		
+		Map<String, Object> offset2 = new HashMap<>();
+		offset2.put("topic", "testTopic");
+		offset2.put("partition", 1);
+		offset2.put("offset", 200L);
+		storedOffsets.add(offset2);
+		
+		executionContext.put("kafkaItemReader.topic.partition.offsets", storedOffsets);
+
+		try (MockedConstruction<org.apache.kafka.clients.consumer.KafkaConsumer> mockedConstruction = mockConstruction(
+				org.apache.kafka.clients.consumer.KafkaConsumer.class)) {
+
+			reader.open(executionContext);
+
+			// Verify that offsets are saved correctly
+			ExecutionContext newContext = new ExecutionContext();
+			reader.update(newContext);
+
+			List<Map<String, Object>> savedOffsets = (List<Map<String, Object>>) newContext.get("kafkaItemReader.topic.partition.offsets");
+			assertNotNull(savedOffsets);
+			assertEquals(2, savedOffsets.size());
+		}
+	}
 }

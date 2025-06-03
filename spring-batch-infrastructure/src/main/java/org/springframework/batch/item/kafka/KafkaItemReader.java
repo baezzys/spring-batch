@@ -48,11 +48,18 @@ import org.springframework.util.Assert;
  *
  * @author Mathieu Ouellet
  * @author Mahmoud Ben Hassine
+ * @author Jinwoo Bae
  * @since 4.2
  */
 public class KafkaItemReader<K, V> extends AbstractItemStreamItemReader<V> {
 
 	private static final String TOPIC_PARTITION_OFFSETS = "topic.partition.offsets";
+	
+	private static final String KEY_TOPIC = "topic";
+	
+	private static final String KEY_PARTITION = "partition";
+	
+	private static final String KEY_OFFSET = "offset";
 
 	private static final long DEFAULT_POLL_TIMEOUT = 30L;
 
@@ -167,21 +174,45 @@ public class KafkaItemReader<K, V> extends AbstractItemStreamItemReader<V> {
 	@Override
 	public void open(ExecutionContext executionContext) {
 		this.kafkaConsumer = new KafkaConsumer<>(this.consumerProperties);
+		initializePartitionOffsets();
+
+		if (this.saveState && executionContext.containsKey(getExecutionContextKey(TOPIC_PARTITION_OFFSETS))) {
+			List<Map<String, Object>> storedOffsets = (List<Map<String, Object>>) executionContext.get(
+					getExecutionContextKey(TOPIC_PARTITION_OFFSETS));
+            restorePartitionOffsets(storedOffsets);
+		}
+
+		this.kafkaConsumer.assign(this.topicPartitions);
+		this.partitionOffsets.forEach(this.kafkaConsumer::seek);
+	}
+	
+	/**
+	 * Initialize partition offsets with default values if not already set.
+	 */
+	private void initializePartitionOffsets() {
 		if (this.partitionOffsets == null) {
 			this.partitionOffsets = new HashMap<>();
 			for (TopicPartition topicPartition : this.topicPartitions) {
 				this.partitionOffsets.put(topicPartition, 0L);
 			}
 		}
-		if (this.saveState && executionContext.containsKey(TOPIC_PARTITION_OFFSETS)) {
-			Map<TopicPartition, Long> offsets = (Map<TopicPartition, Long>) executionContext
-				.get(TOPIC_PARTITION_OFFSETS);
-			for (Map.Entry<TopicPartition, Long> entry : offsets.entrySet()) {
-				this.partitionOffsets.put(entry.getKey(), entry.getValue() == 0 ? 0 : entry.getValue() + 1);
-			}
+	}
+	
+	/**
+	 * Restore partition offsets from the stored list.
+	 * Each entry in the list contains topic, partition, and offset information.
+	 * @param storedOffsets the offsets stored in execution context
+	 */
+	private void restorePartitionOffsets(List<Map<String, Object>> storedOffsets) {
+		for (Map<String, Object> offsetEntry : storedOffsets) {
+			String topic = (String) offsetEntry.get(KEY_TOPIC);
+			Number partition = (Number) offsetEntry.get(KEY_PARTITION);
+			Number offset = (Number) offsetEntry.get(KEY_OFFSET);
+
+			TopicPartition topicPartition = new TopicPartition(topic, partition.intValue());
+			long offsetValue = offset.longValue();
+			this.partitionOffsets.put(topicPartition, offsetValue == 0 ? 0 : offsetValue + 1);
 		}
-		this.kafkaConsumer.assign(this.topicPartitions);
-		this.partitionOffsets.forEach(this.kafkaConsumer::seek);
 	}
 
 	@Nullable
@@ -202,8 +233,18 @@ public class KafkaItemReader<K, V> extends AbstractItemStreamItemReader<V> {
 
 	@Override
 	public void update(ExecutionContext executionContext) {
-		if (this.saveState) {
-			executionContext.put(TOPIC_PARTITION_OFFSETS, new HashMap<>(this.partitionOffsets));
+		if (this.saveState && this.partitionOffsets != null) {
+			List<Map<String, Object>> offsetsToStore = new ArrayList<>();
+			
+			this.partitionOffsets.forEach((topicPartition, offset) -> {
+				Map<String, Object> offsetEntry = new HashMap<>();
+				offsetEntry.put(KEY_TOPIC, topicPartition.topic());
+				offsetEntry.put(KEY_PARTITION, topicPartition.partition());
+				offsetEntry.put(KEY_OFFSET, offset);
+				offsetsToStore.add(offsetEntry);
+			});
+			
+			executionContext.put(getExecutionContextKey(TOPIC_PARTITION_OFFSETS), offsetsToStore);
 		}
 		this.kafkaConsumer.commitSync();
 	}
